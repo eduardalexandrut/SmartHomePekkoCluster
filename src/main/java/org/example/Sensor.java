@@ -3,8 +3,9 @@ package org.example;
 import org.apache.pekko.actor.AbstractActor;
 import org.apache.pekko.actor.ActorRef;
 import org.apache.pekko.actor.Props;
+import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.Adapter;
-import org.apache.pekko.actor.typed.receptionist.Receptionist;
+import org.apache.pekko.actor.typed.javadsl.Routers;
 
 public class Sensor extends AbstractActor {
     private final String sensorId;
@@ -26,8 +27,7 @@ public class Sensor extends AbstractActor {
 //
 //        this.controlUnitRouter = getContext().actorOf(Adapter.toClassic(groupBehavior), "controlUnitRouter");
 
-        org.apache.pekko.actor.typed.Behavior<Object> groupBehavior =
-                org.apache.pekko.actor.typed.javadsl.Routers.group(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY);
+        Behavior<Object> groupBehavior = Routers.group(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY);
 
         org.apache.pekko.actor.typed.ActorRef<Object> typedRouter =
                 Adapter.spawn(getContext(), groupBehavior, "controlUnitRouter");

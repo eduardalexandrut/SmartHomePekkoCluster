@@ -2,6 +2,7 @@
 import org.apache.pekko.actor.*;
 import org.apache.pekko.actor.typed.javadsl.Adapter;
 import org.apache.pekko.actor.typed.receptionist.Receptionist;
+import org.apache.pekko.actor.typed.receptionist.ServiceKey;
 import org.apache.pekko.testkit.TestKit;
 import org.apache.pekko.testkit.TestProbe;
 import org.apache.pekko.util.JavaDurationConverters;
@@ -49,7 +50,7 @@ public class SmartHomeTest {
     }
 
     // Helper method to register mock test probes with the Cluster Receptionist
-    private void registerMockWithReceptionist(org.apache.pekko.actor.typed.receptionist.ServiceKey<Object> key, ActorRef probeRef) {
+    private void registerMockWithReceptionist(ServiceKey<Object> key, ActorRef probeRef) {
         ActorRef classicReceptionist = Adapter.toClassic(Receptionist.get(Adapter.toTyped(system)).ref());
         classicReceptionist.tell(
                 Receptionist.register(key, Adapter.toTyped(probeRef)),
@@ -70,12 +71,13 @@ public class SmartHomeTest {
         // 2. Spawn actors without passing hardcoded direct cross-references
         final ActorRef controlUnit = system.actorOf(ControlUnit.props(fastExitDelay, fastEntryDelay, testConfig), "controlUnit");
         final ActorRef motionSensor = system.actorOf(Sensor.props("LivingRoomMotion", "GroundFloor"), "motionSensor");
+        final ActorRef keyPad = system.actorOf(KeyPad.props(), "keyPad");
 
         // Clear recovery mode on the ControlUnit first
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), kit.testActor());
-
+//        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), kit.testActor());
+        keyPad.tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("1111"), kit.testActor());
         // Allow cluster routers a brief moment to discover the new keys
-        try { Thread.sleep(200); } catch (InterruptedException e) {}
+        try { Thread.sleep(250); } catch (InterruptedException e) {}
 
         // Arm the system
         Set<String> zonesToArm = Set.of("GroundFloor");
@@ -151,41 +153,5 @@ public class SmartHomeTest {
         sirenProbe.expectNoMessage(safetyWindow);
     }
 
-    // =========================================================================
-    // NEW CLUSTER RESILIENCE TEST
-    // =========================================================================
-//    @Test
-//    public void testControlUnitCrashAndKeypadAutoDiscovery() {
-//        final TestKit kit = new TestKit(system);
-//
-//        Map<String, String> testConfig = Map.of("FrontDoor", "Perimeter");
-//
-//        // 1. Deploy the initial Control Unit and Keypad
-//        ActorRef controlUnitV1 = system.actorOf(ControlUnit.props(fastExitDelay, fastEntryDelay, testConfig), "controlUnitV1");
-//        final ActorRef keyPad = system.actorOf(KeyPad.props(), "keyPad");
-//
-//        try { Thread.sleep(200); } catch (InterruptedException e) {}
-//
-//        // 2. Kill the active ControlUnit to simulate a total hardware crash
-//        kit.watch(controlUnitV1);
-//        system.stop(controlUnitV1);
-//        kit.expectTerminated(controlUnitV1);
-//
-//        // 3. Spawn a brand-new ControlUnit instance (representing a rebooted node)
-//        // It will register its new location automatically inside preStart()
-//        ActorRef controlUnitV2 = system.actorOf(ControlUnit.props(fastExitDelay, fastEntryDelay, testConfig), "controlUnitV2");
-//
-//        try { Thread.sleep(200); } catch (InterruptedException e) {}
-//
-//        // 4. Input a PIN via the Keypad.
-//        // The Keypad's Group Router should seamlessly redirect this to controlUnitV2!
-//        keyPad.tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("1111"), kit.testActor());
-//
-//        // 5. Verify the new Control Unit received it and exited recovery state cleanly
-//        // We test this by sending an arm request—if it processes, it's out of recovery mode!
-//        controlUnitV2.tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("Perimeter")), kit.testActor());
-//
-//        // If it successfully arming, it logs the debug text string or changes behaviors
-//        // (No exceptions thrown means cluster discovery resolved perfectly)
-//    }
+
 }

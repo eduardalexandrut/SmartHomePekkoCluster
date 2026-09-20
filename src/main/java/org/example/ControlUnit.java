@@ -3,7 +3,9 @@ package org.example;
 import org.apache.pekko.actor.AbstractActorWithTimers;
 import org.apache.pekko.actor.ActorRef;
 import org.apache.pekko.actor.Props;
+import org.apache.pekko.actor.typed.Behavior;
 import org.apache.pekko.actor.typed.javadsl.Adapter;
+import org.apache.pekko.actor.typed.javadsl.Routers;
 import org.apache.pekko.actor.typed.receptionist.Receptionist;
 import java.time.Duration;
 import java.util.*;
@@ -35,8 +37,7 @@ public class ControlUnit extends AbstractActorWithTimers {
     public void preStart() {
         System.out.println("[ControlUnit] Booting up. Registering with Cluster Receptionist...");
 
-        org.apache.pekko.actor.typed.Behavior<Object> sirenGroup =
-                org.apache.pekko.actor.typed.javadsl.Routers.group(SmartHomeProtocolPekkoCluster.SIREN_SERVICE_KEY);
+        Behavior<Object> sirenGroup = Routers.group(SmartHomeProtocolPekkoCluster.SIREN_SERVICE_KEY);
 
         // 1. Spawn the typed group behavior
         org.apache.pekko.actor.typed.ActorRef<Object> typedSirenRouter =
@@ -48,13 +49,13 @@ public class ControlUnit extends AbstractActorWithTimers {
         org.apache.pekko.actor.typed.ActorRef<Object> typedSelf = Adapter.toTyped(getSelf());
 
         ActorRef classicReceptionist = Adapter.toClassic(
-                org.apache.pekko.actor.typed.receptionist.Receptionist.get(Adapter.toTyped(getContext().getSystem())).ref()
+                Receptionist.get(Adapter.toTyped(getContext().getSystem())).ref()
         );
 
 
         // 3. Register our ControlUnit key globally across the cluster
         classicReceptionist.tell(
-                org.apache.pekko.actor.typed.receptionist.Receptionist.register(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY, typedSelf),
+                Receptionist.register(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY, typedSelf),
                 getSelf()
         );
 
