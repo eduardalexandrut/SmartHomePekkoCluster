@@ -12,46 +12,69 @@
         <maven.compiler.source>21</maven.compiler.source>
         <maven.compiler.target>21</maven.compiler.target>
         <project.build.sourceEncoding>UTF-8</project.build.sourceEncoding>
+        <pekko.version>1.1.5</pekko.version>
     </properties>
 
     <dependencies>
+        <!-- Core Actor -->
         <dependency>
             <groupId>org.apache.pekko</groupId>
-            <artifactId>pekko-actor_3</artifactId>
-            <version>1.5.0</version>
-            <scope>compile</scope>
+            <artifactId>pekko-actor_2.13</artifactId>
+            <version>${pekko.version}</version>
         </dependency>
 
+        <!-- Typed Actor -->
         <dependency>
             <groupId>org.apache.pekko</groupId>
-            <artifactId>pekko-actor-typed_3</artifactId>
-            <version>1.5.0</version>
-            <scope>compile</scope>
+            <artifactId>pekko-actor-typed_2.13</artifactId>
+            <version>${pekko.version}</version>
         </dependency>
 
-        <dependency>
-            <groupId>org.apache.pekko</groupId>
-            <artifactId>pekko-testkit_3</artifactId>
-            <version>1.5.0</version>
-            <scope>test</scope>
-        </dependency>
-
+        <!-- Cluster Core -->
         <dependency>
             <groupId>org.apache.pekko</groupId>
             <artifactId>pekko-cluster_2.13</artifactId>
-            <version>1.1.5</version> </dependency>
+            <version>${pekko.version}</version>
+        </dependency>
+
+        <!-- Cluster Typed -->
         <dependency>
             <groupId>org.apache.pekko</groupId>
             <artifactId>pekko-cluster-typed_2.13</artifactId>
-            <version>1.1.5</version>
+            <version>${pekko.version}</version>
         </dependency>
 
+        <!-- TestKit -->
+        <dependency>
+            <groupId>org.apache.pekko</groupId>
+            <artifactId>pekko-testkit_2.13</artifactId>
+            <version>${pekko.version}</version>
+            <scope>test</scope>
+        </dependency>
+
+        <!-- Explicit Typesafe Config to prevent helper mismatches -->
+        <dependency>
+            <groupId>com.typesafe</groupId>
+            <artifactId>config</artifactId>
+            <version>1.4.3</version>
+        </dependency>
+
+        <!-- JUnit 5 -->
         <dependency>
             <groupId>org.junit.jupiter</groupId>
             <artifactId>junit-jupiter</artifactId>
-            <version>RELEASE</version>
+            <version>5.10.2</version>
             <scope>test</scope>
         </dependency>
     </dependencies>
 
+    <build>
+        <plugins>
+            <plugin>
+                <groupId>org.apache.maven.plugins</groupId>
+                <artifactId>maven-surefire-plugin</artifactId>
+                <version>3.2.5</version>
+            </plugin>
+        </plugins>
+    </build>
 </project>

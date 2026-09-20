@@ -106,19 +106,19 @@ public class ControlUnit extends AbstractActorWithTimers {
                 .build();
     }
 
-    private Receive allarmState() {
+    private Receive alarmState() {
         return receiveBuilder()
-                .match(SmartHomeProtocolPekkoCluster.ValidPinEntered.class, this::onValidPinEnteredAllarmState)
-                .match(SmartHomeProtocolPekkoCluster.InvalidPinEntered.class, this::onInvalidPinEnteredAllarmState)
+                .match(SmartHomeProtocolPekkoCluster.ValidPinEntered.class, this::onValidPinEnteredAlarmState)
+                .match(SmartHomeProtocolPekkoCluster.InvalidPinEntered.class, this::onInvalidPinEnteredAlarmState)
                 .build();
     }
 
-    private void onInvalidPinEnteredAllarmState(SmartHomeProtocolPekkoCluster.InvalidPinEntered invalidPinEntered) {
+    private void onInvalidPinEnteredAlarmState(SmartHomeProtocolPekkoCluster.InvalidPinEntered invalidPinEntered) {
         System.out.println("[ControlUnit] WARNING! Invalid pin entered: ");
     }
 
-    private void onValidPinEnteredAllarmState(SmartHomeProtocolPekkoCluster.ValidPinEntered validPinEntered) {
-        System.out.println("[ControlUnit] Valid pin entered! Disarming allarm");
+    private void onValidPinEnteredAlarmState(SmartHomeProtocolPekkoCluster.ValidPinEntered validPinEntered) {
+        System.out.println("[ControlUnit] Valid pin entered! Disarming alarm");
         sirenRouter.tell(new SmartHomeProtocolPekkoCluster.DeactivateSiren(), self());
         getContext().become(disarmedState());
     }
@@ -126,7 +126,7 @@ public class ControlUnit extends AbstractActorWithTimers {
     private void onEntryDelayTimeout(EntryDelayTimeout entryDelayTimeout) {
         System.out.println("[ControlUnit] Entry delay timeout received. Setting up alarm!");
         sirenRouter.tell(new SmartHomeProtocolPekkoCluster.ActivateSiren(), this.self());
-        getContext().become(allarmState());
+        getContext().become(alarmState());
     }
 
     private void onSensorTriggeredArmed(SmartHomeProtocolPekkoCluster.SensorTriggeredMsg sensorTriggeredMsg) {
