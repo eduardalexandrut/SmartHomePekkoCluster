@@ -1,4 +1,5 @@
 
+import jdk.jfr.Description;
 import org.apache.pekko.actor.*;
 import org.apache.pekko.actor.typed.javadsl.Adapter;
 import org.apache.pekko.actor.typed.receptionist.Receptionist;
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import scala.concurrent.duration.FiniteDuration;
 
+import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.TimeUnit;
@@ -25,9 +27,16 @@ public class SmartHomeTest {
 
     private ActorSystem system;
 
-    // Fast delays for testing
-    private final java.time.Duration fastExitDelay = java.time.Duration.ofMillis(100);
-    private final java.time.Duration fastEntryDelay = java.time.Duration.ofMillis(100);
+    // Fast delays for rapid testing
+    private static final Duration FAST_EXIT_DELAY = Duration.ofMillis(100);
+    private static final Duration FAST_ENTRY_DELAY = Duration.ofMillis(100);
+
+    // Shared home layout configuration
+    private static final Map<String, String> TEST_CONFIG = Map.of(
+            "LivingRoomMotion", "GroundFloor",
+            "FrontDoor", "Perimeter",
+            "BedroomMotion", "UpperFloor"
+    );
 
     // Baseline configuration to turn a standard ActorSystem into a localized Cluster Node
     private Config getClusterConfig() {
@@ -50,7 +59,7 @@ public class SmartHomeTest {
     }
 
     // Helper method to register mock test probes with the Cluster Receptionist
-    private void registerMockWithReceptionist(ServiceKey<Object> key, ActorRef probeRef) {
+    private void registerMockWithReceptionist(org.apache.pekko.actor.typed.receptionist.ServiceKey<Object> key, ActorRef probeRef) {
         ActorRef classicReceptionist = Adapter.toClassic(Receptionist.get(Adapter.toTyped(system)).ref());
         classicReceptionist.tell(
                 Receptionist.register(key, Adapter.toTyped(probeRef)),
@@ -58,39 +67,59 @@ public class SmartHomeTest {
         );
     }
 
+    /**
+     * Helper record to package standard test actors together and reduce duplication.
+     */
+    private record TestEnvironment(
+            ActorRef controlUnit,
+            ActorRef frontDoorSensor,
+            ActorRef livingRoomSensor,
+            ActorRef bedroomSensor,
+            ActorRef keypad
+    ) {}
+
+    /**
+     * Spawns all actors, waits for cluster gossip to finish, and exits the safe recovery mode.
+     */
+    private TestEnvironment createEnvironment(TestKit kit, TestProbe sirenProbe) {
+        // Register Mock Siren with Receptionist
+        registerMockWithReceptionist(SmartHomeProtocolPekkoCluster.SIREN_SERVICE_KEY, sirenProbe.ref());
+
+        // Spawn Distributed Actors
+        ActorRef controlUnit = system.actorOf(ControlUnit.props(FAST_EXIT_DELAY, FAST_ENTRY_DELAY, TEST_CONFIG), "controlUnit");
+        ActorRef frontDoor = system.actorOf(Sensor.props("FrontDoor", "Perimeter"), "frontDoor");
+        ActorRef livingRoom = system.actorOf(Sensor.props("LivingRoomMotion", "GroundFloor"), "livingRoom");
+        ActorRef bedroom = system.actorOf(Sensor.props("BedroomMotion", "UpperFloor"), "bedroom");
+        ActorRef keypad = system.actorOf(KeyPad.props(), "keypad");
+
+        // Wait for the Cluster Receptionist "Gossip" protocol to propagate routers
+        try { Thread.sleep(1500); } catch (InterruptedException e) {}
+
+        // Exit the Control Unit's Safe Recovery Mode
+        keypad.tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("1111"), kit.testActor());
+
+        // Give ControlUnit a tiny moment to process the PIN and shift to disarmedState
+        try { Thread.sleep(50); } catch (InterruptedException e) {}
+
+        return new TestEnvironment(controlUnit, frontDoor, livingRoom, bedroom, keypad);
+    }
+
     @Test
     public void testSirenFiresOnTimeout() {
         final TestKit kit = new TestKit(system);
         final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
 
-        // 1. Register our mock siren probe with the receptionist so the ControlUnit can route to it
-        registerMockWithReceptionist(SmartHomeProtocolPekkoCluster.SIREN_SERVICE_KEY, sirenProbe.ref());
+        // Arm the system (GroundFloor & Perimeter)
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("GroundFloor", "Perimeter")), kit.testActor());
 
-        Map<String, String> testConfig = Map.of("LivingRoomMotion", "GroundFloor");
-
-        // 2. Spawn actors without passing hardcoded direct cross-references
-        final ActorRef controlUnit = system.actorOf(ControlUnit.props(fastExitDelay, fastEntryDelay, testConfig), "controlUnit");
-        final ActorRef motionSensor = system.actorOf(Sensor.props("LivingRoomMotion", "GroundFloor"), "motionSensor");
-        final ActorRef keyPad = system.actorOf(KeyPad.props(), "keyPad");
-
-        // Clear recovery mode on the ControlUnit first
-//        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), kit.testActor());
-        keyPad.tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("1111"), kit.testActor());
-        // Allow cluster routers a brief moment to discover the new keys
-        try { Thread.sleep(250); } catch (InterruptedException e) {}
-
-        // Arm the system
-        Set<String> zonesToArm = Set.of("GroundFloor");
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(zonesToArm), kit.testActor());
-
-        // Wait out exit delay
         try { Thread.sleep(150); } catch (InterruptedException e) {}
 
-        // Trigger the sensor
-        motionSensor.tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+        // Trigger a sensor in an active zone
+        env.livingRoomSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
 
-        // Assert the Siren fires after the entry delay expires
-        FiniteDuration assertionTimeout = JavaDurationConverters.asFiniteDuration(java.time.Duration.ofMillis(300));
+        // Assert the Siren fires after the fast entry delay expires
+        FiniteDuration assertionTimeout = JavaDurationConverters.asFiniteDuration(Duration.ofMillis(300));
         sirenProbe.expectMsgClass(assertionTimeout, SmartHomeProtocolPekkoCluster.ActivateSiren.class);
     }
 
@@ -98,30 +127,20 @@ public class SmartHomeTest {
     public void testSuccessfulDisarmDuringEntryDelay() {
         final TestKit kit = new TestKit(system);
         final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
 
-        registerMockWithReceptionist(SmartHomeProtocolPekkoCluster.SIREN_SERVICE_KEY, sirenProbe.ref());
-
-        Map<String, String> testConfig = Map.of("FrontDoor", "Perimeter");
-
-        final ActorRef controlUnit = system.actorOf(ControlUnit.props(fastExitDelay, fastEntryDelay, testConfig), "controlUnit");
-        final ActorRef frontDoorSensor = system.actorOf(Sensor.props("FrontDoor", "Perimeter"), "frontDoorSensor");
-
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), kit.testActor());
-        try { Thread.sleep(200); } catch (InterruptedException e) {}
-
-        Set<String> zonesToArm = Set.of("Perimeter");
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(zonesToArm), kit.testActor());
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("GroundFloor", "Perimeter", "UpperFloor")), kit.testActor());
 
         try { Thread.sleep(150); } catch (InterruptedException e) {}
 
-        // Simulate intrusion
-        frontDoorSensor.tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+        env.frontDoorSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
 
-        // Simulate immediate disarm input
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), kit.testActor());
+        try { Thread.sleep(30); } catch (InterruptedException e) {}
 
-        // Assert that the Siren NEVER received an ActivateSiren command
-        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(400, TimeUnit.MILLISECONDS);
+        // Disarm via KeyPad cluster router
+        env.keypad().tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("1111"), kit.testActor());
+
+        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(500, TimeUnit.MILLISECONDS);
         sirenProbe.expectNoMessage(safetyWindow);
     }
 
@@ -129,28 +148,119 @@ public class SmartHomeTest {
     public void testPartialArmingIgnoresInactiveZones() {
         final TestKit kit = new TestKit(system);
         final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
 
-        registerMockWithReceptionist(SmartHomeProtocolPekkoCluster.SIREN_SERVICE_KEY, sirenProbe.ref());
-
-        Map<String, String> testConfig = Map.of("BedroomMotion", "UpperFloor");
-
-        final ActorRef controlUnit = system.actorOf(ControlUnit.props(fastExitDelay, fastEntryDelay, testConfig), "controlUnit");
-        final ActorRef bedroomSensor = system.actorOf(Sensor.props("BedroomMotion", "UpperFloor"), "bedroomSensor");
-
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), kit.testActor());
-        try { Thread.sleep(200); } catch (InterruptedException e) {}
-
-        // Arm ONLY the Perimeter. Leave "UpperFloor" inactive!
-        Set<String> nightModeZones = Set.of("Perimeter");
-        controlUnit.tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(nightModeZones), kit.testActor());
+        // Night Mode: Arm ONLY Perimeter and GroundFloor (UpperFloor left inactive)
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("Perimeter", "GroundFloor")), kit.testActor());
 
         try { Thread.sleep(150); } catch (InterruptedException e) {}
 
         // Trigger user movement upstairs in the inactive zone
-        bedroomSensor.tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+        env.bedroomSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
 
-        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(400, TimeUnit.MILLISECONDS);
+        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(500, TimeUnit.MILLISECONDS);
         sirenProbe.expectNoMessage(safetyWindow);
+    }
+
+    @Test
+    @Description("When the system is in the Disarmed state, triggering any sensor does not trigger an entry delay or fire the siren")
+    public void testSensorsIgnoredWhenDisarmed() {
+        final TestKit kit = new TestKit(system);
+        final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
+
+        // Directly trigger sensor without arming
+        env.bedroomSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+
+        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(500, TimeUnit.MILLISECONDS);
+        sirenProbe.expectNoMessage(safetyWindow);
+    }
+
+    @Test
+    @Description("Verifies that sensors triggered while the exit delay countdown is active are ignored")
+    public void testSensorsIgnoredDuringExitDelay() {
+        final TestKit kit = new TestKit(system);
+        final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
+
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("Perimeter")), kit.testActor());
+
+        // Trigger sensor immediately during exit delay countdown
+        env.frontDoorSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+
+        // Wait out the exit delay
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+
+        // Ensure siren never fired prematurely
+        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(200, TimeUnit.MILLISECONDS);
+        sirenProbe.expectNoMessage(safetyWindow);
+    }
+
+    @Test
+    @Description("Verifies that entering a valid PIN during the Alarm state deactivates the siren and disarms the system")
+    public void testAlarmStopsWithValidPin() {
+        final TestKit kit = new TestKit(system);
+        final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
+
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("Perimeter")), kit.testActor());
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+
+        env.frontDoorSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+
+        // Wait out entry delay to reach Alarm state
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+
+        // Verify siren activated
+        sirenProbe.expectMsgClass(SmartHomeProtocolPekkoCluster.ActivateSiren.class);
+
+        // Enter valid PIN via keypad cluster router
+        env.keypad().tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("1111"), kit.testActor());
+
+        // Verify siren deactivated
+        sirenProbe.expectMsgClass(SmartHomeProtocolPekkoCluster.DeactivateSiren.class);
+    }
+
+    @Test
+    @Description("Verifies that entering an invalid PIN during the Alarm state does not stop the siren")
+    public void testInvalidPinDuringAlarm() {
+        final TestKit kit = new TestKit(system);
+        final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
+
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("Perimeter")), kit.testActor());
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+
+        env.frontDoorSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+
+        sirenProbe.expectMsgClass(SmartHomeProtocolPekkoCluster.ActivateSiren.class);
+
+        // Enter invalid PIN via keypad
+        env.keypad().tell(new SmartHomeProtocolPekkoCluster.InsertPinMsg("0000"), kit.testActor());
+
+        // Siren should keep going (expect no DeactivateSiren message)
+        FiniteDuration safetyWindow = scala.concurrent.duration.Duration.create(200, TimeUnit.MILLISECONDS);
+        sirenProbe.expectNoMessage(safetyWindow);
+    }
+
+    @Test
+    @Description("Verifies that full arming activates all zones, allowing sensors in upper floors to trigger the alarm")
+    public void testFullArmingActivatesAllZones() {
+        final TestKit kit = new TestKit(system);
+        final TestProbe sirenProbe = new TestProbe(system);
+        final TestEnvironment env = createEnvironment(kit, sirenProbe);
+
+        // Arm all zones including UpperFloor
+        env.controlUnit().tell(new SmartHomeProtocolPekkoCluster.ArmSystemRequest(Set.of("GroundFloor", "Perimeter", "UpperFloor")), kit.testActor());
+        try { Thread.sleep(150); } catch (InterruptedException e) {}
+
+        // Trigger upper floor sensor
+        env.bedroomSensor().tell(new SmartHomeProtocolPekkoCluster.OpenDoorMsg(), kit.testActor());
+
+        // Siren should fire after entry delay
+        FiniteDuration assertionTimeout = JavaDurationConverters.asFiniteDuration(Duration.ofMillis(300));
+        sirenProbe.expectMsgClass(assertionTimeout, SmartHomeProtocolPekkoCluster.ActivateSiren.class);
     }
 
 
