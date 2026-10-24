@@ -3,60 +3,44 @@ package org.example;
 import org.apache.pekko.actor.AbstractActor;
 import org.apache.pekko.actor.ActorRef;
 import org.apache.pekko.actor.Props;
-import org.apache.pekko.actor.typed.Behavior;
-import org.apache.pekko.actor.typed.javadsl.Adapter;
-import org.apache.pekko.actor.typed.javadsl.Routers;
 
+/**
+ * A motion sensor or a door/window sensor. Each sensor has a sensorId, a type
+ * and the zone it belongs to. When its hardware detects something (Detect
+ * message), it sends a SensorTriggered event to the control unit, wherever the
+ * control unit is running in the cluster.
+ */
 public class Sensor extends AbstractActor {
     private final String sensorId;
-    private final String zoneName;
-    private final ActorRef controlUnitRouter;
+    private final SmartHomeProtocol.SensorType type;
+    private final String zone;
+    private final ActorRef controlUnit;
 
-    public static Props props(String sensorId, String zoneName) {
-        return Props.create(Sensor.class, () -> new Sensor(sensorId, zoneName));
+    public static Props props(String sensorId, SmartHomeProtocol.SensorType type, String zone, ActorRef controlUnit) {
+        return Props.create(Sensor.class, () -> new Sensor(sensorId, type, zone, controlUnit));
     }
 
-    public Sensor(String sensorId, String zoneName) {
+    public Sensor(String sensorId, SmartHomeProtocol.SensorType type, String zone, ActorRef controlUnit) {
         this.sensorId = sensorId;
-        this.zoneName = zoneName;
-
-        // Create a local Group Router instance pointing to the global ControlUnit key.
-        // The router will automatically handle finding the ControlUnit node across the cluster.
-//        org.apache.pekko.actor.typed.Behavior<Object> groupBehavior =
-//                org.apache.pekko.actor.typed.javadsl.Routers.group(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY);
-//
-//        this.controlUnitRouter = getContext().actorOf(Adapter.toClassic(groupBehavior), "controlUnitRouter");
-
-        Behavior<Object> groupBehavior = Routers.group(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY);
-
-        org.apache.pekko.actor.typed.ActorRef<Object> typedRouter =
-                Adapter.spawn(getContext(), groupBehavior, "controlUnitRouter");
-
-        this.controlUnitRouter = Adapter.toClassic(typedRouter);
+        this.type = type;
+        this.zone = zone;
+        this.controlUnit = controlUnit;
     }
 
     @Override
     public Receive createReceive() {
         return receiveBuilder()
-                .match(SmartHomeProtocolPekkoCluster.OpenDoorMsg.class, m -> {
-                    System.out.println("[" + zoneName + " Node] Hardware sensor " + sensorId + " tripped!");
-
-                    // Fire the event directly into the group router, forwarding it to the Control Unit node
-                    controlUnitRouter.tell(
-                            new SmartHomeProtocolPekkoCluster.SensorTriggeredMsg(sensorId, zoneName),
-                            getSelf()
-                    );
-                })
+                .match(SmartHomeProtocol.Detect.class, this::onDetect)
                 .build();
     }
 
-    private void onDoorOpen(SmartHomeProtocolPekkoCluster.OpenDoorMsg openDoorMsg) {
-        System.out.println("Sensor id: " + sensorId + " detected an open door event in " + zoneName);
-        getSender().tell(new SmartHomeProtocolPekkoCluster.SensorTriggeredMsg(sensorId, zoneName), getSelf());
-    }
-
-    private void onWindowOpen(SmartHomeProtocolPekkoCluster.OpenWindowMsg triggerSensorMsg) {
-        System.out.println("Sensor id: " + sensorId + " detected an open window event in " + zoneName);
-        getSender().tell(new SmartHomeProtocolPekkoCluster.SensorTriggeredMsg(sensorId, zoneName), getSelf());
+    private void onDetect(SmartHomeProtocol.Detect detect) {
+        String what = switch (type) {
+            case MOTION -> "motion detected";
+            case DOOR -> "door opened";
+            case WINDOW -> "window opened";
+        };
+        System.out.println("[Sensor " + sensorId + "] " + what + " in zone " + zone);
+        controlUnit.tell(new SmartHomeProtocol.SensorTriggered(sensorId, type, zone), getSelf());
     }
 }

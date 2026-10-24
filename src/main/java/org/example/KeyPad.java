@@ -3,43 +3,53 @@ package org.example;
 import org.apache.pekko.actor.AbstractActor;
 import org.apache.pekko.actor.ActorRef;
 import org.apache.pekko.actor.Props;
-import org.apache.pekko.actor.typed.Behavior;
-import org.apache.pekko.actor.typed.javadsl.Adapter;
-import org.apache.pekko.actor.typed.javadsl.Routers;
 
+/**
+ * Numeric keypad. It checks the PIN and forwards the result to the control unit
+ * (through the singleton proxy, so the control unit can be on any node).
+ */
 public class KeyPad extends AbstractActor {
-    private final ActorRef controlUnitRouter;
-    private static final String CORRECT_PIN = "1111";
+    private final String keypadId;
+    private final ActorRef controlUnit;
+    private final String correctPin;
 
-    public static Props props() {
-        return Props.create(KeyPad.class, KeyPad::new);
+    public static Props props(String keypadId, ActorRef controlUnit, String correctPin) {
+        return Props.create(KeyPad.class, () -> new KeyPad(keypadId, controlUnit, correctPin));
     }
 
-    public KeyPad() {
-        Behavior<Object> groupBehavior = Routers.group(SmartHomeProtocolPekkoCluster.CONTROL_UNIT_SERVICE_KEY);
-
-        org.apache.pekko.actor.typed.ActorRef<Object> typedRouter =
-                Adapter.spawn(getContext(), groupBehavior, "controlUnitRouter");
-
-        this.controlUnitRouter = Adapter.toClassic(typedRouter);
+    public KeyPad(String keypadId, ActorRef controlUnit, String correctPin) {
+        this.keypadId = keypadId;
+        this.controlUnit = controlUnit;
+        this.correctPin = correctPin;
     }
 
     @Override
     public Receive createReceive() {
         return receiveBuilder()
-                .match(SmartHomeProtocolPekkoCluster.InsertPinMsg.class, this::onInsertPinMsg)
+                .match(SmartHomeProtocol.InsertPin.class, this::onInsertPin)
+                .match(SmartHomeProtocol.ArmWithPin.class, this::onArmWithPin)
                 .build();
     }
 
-    private void onInsertPinMsg(SmartHomeProtocolPekkoCluster.InsertPinMsg insertPinMsg) {
-        final boolean isPinCorrect = insertPinMsg.pin().equals(CORRECT_PIN);
-        if (isPinCorrect) {
-            System.out.println("[KeyPad Node] Correct PIN entered! Forwarding to cluster Control Unit...");
-            // Sends the message across the cluster safely via the router
-            controlUnitRouter.tell(new SmartHomeProtocolPekkoCluster.ValidPinEntered(), getSelf());
+    // PIN typed to disarm the system or stop the alarm (or leave recovery mode)
+    private void onInsertPin(SmartHomeProtocol.InsertPin insertPin) {
+        if (insertPin.pin().equals(correctPin)) {
+            System.out.println("[KeyPad " + keypadId + "] Correct PIN.");
+            controlUnit.tell(new SmartHomeProtocol.ValidPinEntered(keypadId), getSelf());
         } else {
-            System.out.println("[KeyPad Node] Wrong PIN entered!");
-            controlUnitRouter.tell(new SmartHomeProtocolPekkoCluster.InvalidPinEntered(), getSelf());
+            System.out.println("[KeyPad " + keypadId + "] Wrong PIN!");
+            controlUnit.tell(new SmartHomeProtocol.InvalidPinEntered(keypadId), getSelf());
+        }
+    }
+
+    // The system is armed only if the PIN is correct
+    private void onArmWithPin(SmartHomeProtocol.ArmWithPin armWithPin) {
+        if (armWithPin.pin().equals(correctPin)) {
+            System.out.println("[KeyPad " + keypadId + "] Correct PIN. Arming request sent.");
+            controlUnit.tell(new SmartHomeProtocol.ArmSystemRequest(armWithPin.zonesToArm()), getSelf());
+        } else {
+            System.out.println("[KeyPad " + keypadId + "] Wrong PIN! The system is not armed.");
+            controlUnit.tell(new SmartHomeProtocol.InvalidPinEntered(keypadId), getSelf());
         }
     }
 }
