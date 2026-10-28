@@ -16,10 +16,10 @@ public class Siren extends AbstractActorWithTimers {
     private static final Object REGISTER_TIMER_KEY = "RegisterTimerKey";
     private static final Duration REGISTER_INTERVAL = Duration.ofSeconds(3);
 
+    // Internal tick token for the periodic registration
     private static class RegisterTick {}
 
     private final ActorRef controlUnit;
-    private boolean ringing = false;
 
     public static Props props(ActorRef controlUnit) {
         return Props.create(Siren.class, () -> new Siren(controlUnit));
@@ -31,30 +31,29 @@ public class Siren extends AbstractActorWithTimers {
 
     @Override
     public void preStart() {
-        register();
+        controlUnit.tell(new SmartHomeProtocol.RegisterSiren(getSelf()), ActorRef.noSender());
         getTimers().startTimerWithFixedDelay(REGISTER_TIMER_KEY, new RegisterTick(), REGISTER_INTERVAL);
     }
 
     @Override
     public Receive createReceive() {
         return receiveBuilder()
-                .match(RegisterTick.class, m -> register())
-                .match(SmartHomeProtocol.ActivateSiren.class, m -> {
-                    if (!ringing) {
-                        ringing = true;
-                        System.out.println("[Siren] *** SIREN ACTIVATED ***");
-                    }
-                })
-                .match(SmartHomeProtocol.DeactivateSiren.class, m -> {
-                    if (ringing) {
-                        ringing = false;
-                        System.out.println("[Siren] Siren deactivated.");
-                    }
-                })
+                .match(RegisterTick.class, this::onRegisterTick)
+                .match(SmartHomeProtocol.ActivateSiren.class, this::onActivateSiren)
+                .match(SmartHomeProtocol.DeactivateSiren.class, this::onDeactivateSiren)
                 .build();
     }
 
-    private void register() {
+    private void onRegisterTick(RegisterTick registerTick) {
         controlUnit.tell(new SmartHomeProtocol.RegisterSiren(getSelf()), getSelf());
     }
+
+    private void onDeactivateSiren(SmartHomeProtocol.DeactivateSiren deactivateSiren) {
+        System.out.println("Siren deactivated!");
+    }
+
+    private void onActivateSiren(SmartHomeProtocol.ActivateSiren activateSiren) {
+        System.out.println("Siren activated!");
+    }
+
 }
